@@ -1,0 +1,71 @@
+name: CI · Dev deployment
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build (ncc → dist/)
+        run: npx ncc build src/index.js -o dist --license licenses.txt
+
+      - name: Smoke test (the action entry point exists)
+        run: test -s dist/index.js && echo "dist/index.js OK"
+
+      - name: Package build.zip
+        run: zip -r build.zip dist action.yml package.json README.md LICENSE
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifact
+          path: build.zip
+
+  deploy-dev:
+    name: Deploy to dev
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: dev
+      url: ${{ steps.release.outputs.url }}
+    permissions:
+      contents: write          # needed to create a release
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifact
+
+      - name: Release dev build
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ vars.BUILD_TAG }}-build.${{ github.run_number }}
+          NOTE: ${{ vars.RELEASE_NOTE }}
+        run: |
+          gh release create "$TAG" build.zip \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "$TAG" \
+            --notes "$NOTE (build tag: $TAG, commit: $GITHUB_SHA)"
+          echo "url=$(gh release view "$TAG" --json url -q .url)" >> "$GITHUB_OUTPUT"
+          echo "### ✅ Dev release $TAG created" >> "$GITHUB_STEP_SUMMARY"
