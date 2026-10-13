@@ -1,5 +1,8 @@
 <h1 align="center" id="title">Activity Log</h1>
 
+[![CI](https://github.com/NIU1642329/activity-log/actions/workflows/ci-dev.yml/badge.svg)](https://github.com/NIU1642329/activity-log/actions/workflows/ci-dev.yml)
+[![Release](https://github.com/NIU1642329/activity-log/actions/workflows/release.yml/badge.svg)](https://github.com/NIU1642329/activity-log/actions/workflows/release.yml)
+
 ![activity log](https://socialify.git.ci/TheDanniCraft/activity-log/image?forks=1&issues=1&language=1&logo=https%3A%2F%2Favatars.githubusercontent.com%2Fu%2F66677362&name=1&owner=1&pattern=Solid&pulls=1&stargazers=1&theme=Auto)
 
 <p align="center">
