@@ -32,7 +32,7 @@ describe('artifact-check (unit)', () => {
   });
 
   test('production requires more files than staging', () => {
-    assert.deepEqual(requiredFiles('staging'), ['action.yml']);
+    assert.deepEqual(requiredFiles('staging'), ['action.yml', 'package.json']]);
     assert.ok(requiredFiles('prod').includes('dist/licenses.txt'));
   });
 
