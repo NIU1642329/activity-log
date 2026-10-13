@@ -69,7 +69,9 @@ jobs:
           node-version: 22
       - run: npm install
       - name: Unit tests with coverage (lines ≥ 90 %, functions ≥ 90 %, branches ≥ 80 %)
+        shell: bash
         run: |
+          set -o pipefail
           mkdir -p reports
           npm run test:coverage | tee reports/coverage.txt
       - name: Coverage summary
