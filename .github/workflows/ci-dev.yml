@@ -1,4 +1,4 @@
-name: CI · Dev deployment
+name: CI · Build → Test → Dev
 
 on:
   push:
@@ -15,45 +15,64 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - name: Install dependencies
         run: npm install
-
       - name: Build (ncc → dist/)
         run: npx ncc build src/index.js -o dist --license licenses.txt
-
-      - name: Smoke test (the action entry point exists)
-        run: test -s dist/index.js && echo "dist/index.js OK"
-
-      - name: Package build.zip
-        run: zip -r build.zip dist action.yml package.json README.md LICENSE
-
-      - name: Upload artifact
+      - name: Assemble the bundle
+        run: |
+          mkdir -p bundle
+          cp -r dist action.yml package.json README.md LICENSE bundle/
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifact
-          path: build.zip
+          name: bundle
+          path: bundle/
 
-  deploy-dev:
-    name: Deploy to dev
+  test:
+    name: Test (unit + integration)
     needs: build
+    runs-on: ubuntu-latest
+    env:
+      TEST_ENV: staging
+    steps:
+      - name: Checkout (tests live in the repo)
+        uses: actions/checkout@v4
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle
+          path: bundle/
+      - name: Unit tests
+        run: npm test || (echo "::error::❌ Unit tests failed" && exit 1)
+      - name: Integration tests on the built bundle
+        run: npm run test:integration || (echo "::error::❌ Integration tests failed" && exit 1)
+
+  release-dev:
+    name: Release to dev
+    needs: test                      # only runs if every test passed
     runs-on: ubuntu-latest
     environment:
       name: dev
       url: ${{ steps.release.outputs.url }}
     permissions:
-      contents: write          # needed to create a release
+      contents: write
     steps:
-      - name: Download artifact
+      - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: build-artifact
-
+          name: bundle
+          path: bundle/
       - name: Release dev build
         id: release
         env:
@@ -62,10 +81,50 @@ jobs:
           TAG: ${{ vars.BUILD_TAG }}-build.${{ github.run_number }}
           NOTE: ${{ vars.RELEASE_NOTE }}
         run: |
-          gh release create "$TAG" build.zip \
-            --target "$GITHUB_SHA" \
-            --prerelease \
-            --title "$TAG" \
-            --notes "$NOTE (build tag: $TAG, commit: $GITHUB_SHA)"
+          echo "✅ Tests passed. Releasing $TAG"
+          (cd bundle && zip -r ../build.zip .)
+          gh release create "$TAG" build.zip --target "$GITHUB_SHA" --prerelease --title "$TAG" \
+            --notes "$NOTE — released after unit + integration tests passed (commit: $GITHUB_SHA)"
           echo "url=$(gh release view "$TAG" --json url -q .url)" >> "$GITHUB_OUTPUT"
-          echo "### ✅ Dev release $TAG created" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ✅ Tests passed → dev release $TAG" >> "$GITHUB_STEP_SUMMARY"
+
+  open-issue-on-failure:
+    name: Open issue if tests fail
+    needs: [build, test]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create or update the ci-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: "build=${{ needs.build.result }}, test=${{ needs.test.result }}"
+        run: |
+          gh label create ci-failure --color B60205 --description "Automated: pipeline test failure" --force
+          BODY="Workflow **$GITHUB_WORKFLOW** failed on commit $GITHUB_SHA. Job results: $RESULTS. The release was skipped. Run: $RUN_URL"
+          ISSUE=$(gh issue list --label ci-failure --state open --json number -q '.[0].number')
+          if [ -n "$ISSUE" ]; then
+            gh issue comment "$ISSUE" --body "$BODY"
+          else
+            gh issue create --title "❌ Tests failed on master" --label ci-failure --body "$BODY"
+          fi
+
+  close-issue-on-success:
+    name: Close issue when tests pass again
+    needs: release-dev
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close open ci-failure issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          for ISSUE in $(gh issue list --label ci-failure --state open --json number -q '.[].number'); do
+            gh issue close "$ISSUE" --comment "✅ Fixed: tests pass again and the release went out. Run: $RUN_URL"
+          done
